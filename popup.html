@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Filler for Google Forms</title>
+  <link rel="stylesheet" href="popup.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <header class="header">
+      <div class="logo-wrapper">
+        <div class="logo-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2L9.19 8.63L2 12L9.19 15.37L12 22L14.81 15.37L22 12L14.81 8.63L12 2Z"/>
+          </svg>
+        </div>
+        <div>
+          <h1 class="title">AI Form Filler</h1>
+          <p class="subtitle">Direct AI Integration (BYOK)</p>
+        </div>
+      </div>
+      <span class="badge">BYOK</span>
+    </header>
+
+    <!-- Status Banner -->
+    <div id="statusBanner" class="status-banner status-idle">
+      <div class="status-dot"></div>
+      <span id="statusText">Checking configuration...</span>
+    </div>
+
+    <!-- Form Section -->
+    <form id="settingsForm" class="form-section">
+      <!-- AI Provider Selector -->
+      <div class="input-group">
+        <label for="providerSelect">AI Provider</label>
+        <div class="select-wrapper">
+          <select id="providerSelect">
+            <option value="gemini">Google Gemini</option>
+            <option value="groq">Groq (Ultra Fast Inference)</option>
+          </select>
+          <svg class="select-arrow" viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none">
+            <polyline points="6 9 12 15 18 9"></polyline>
+          </svg>
+        </div>
+      </div>
+
+      <!-- API Key Field -->
+      <div class="input-group">
+        <div class="label-row">
+          <label id="apiKeyLabel" for="apiKey">Gemini API Key</label>
+          <a id="getFreeKeyLink" href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" class="link-btn">
+            Get Free Key
+            <svg class="external-icon" viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" stroke-width="2" fill="none">
+              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+              <polyline points="15 3 21 3 21 9"></polyline>
+              <line x1="10" y1="14" x2="21" y2="3"></line>
+            </svg>
+          </a>
+        </div>
+        <div class="input-wrapper">
+          <input 
+            type="password" 
+            id="apiKey" 
+            placeholder="AIzaSy..." 
+            autocomplete="off" 
+            spellcheck="false"
+            required
+          />
+          <button type="button" id="toggleKeyVisibility" class="icon-btn" title="Toggle visibility">
+            <svg id="eyeIcon" viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none">
+              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+              <circle cx="12" cy="12" r="3"></circle>
+            </svg>
+          </button>
+        </div>
+        <p class="help-text">Stored securely in your local browser storage.</p>
+      </div>
+
+      <!-- Model Selection -->
+      <div class="input-group">
+        <label for="modelSelect">AI Model</label>
+        <div class="select-wrapper">
+          <select id="modelSelect">
+            <!-- Dynamically populated based on provider -->
+          </select>
+          <svg class="select-arrow" viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none">
+            <polyline points="6 9 12 15 18 9"></polyline>
+          </svg>
+        </div>
+      </div>
+
+      <!-- Action Buttons -->
+      <div class="actions">
+        <button type="button" id="testBtn" class="btn btn-secondary">
+          <span class="btn-text">Test Key</span>
+        </button>
+        <button type="submit" id="saveBtn" class="btn btn-primary">
+          <span class="btn-text">Save Settings</span>
+        </button>
+      </div>
+    </form>
+
+    <!-- Notification Toast -->
+    <div id="toast" class="toast hidden"></div>
+
+    <!-- Footer -->
+    <footer class="footer">
+      <div class="footer-info">
+        <span>No server middlemen &bull; Direct API connection</span>
+      </div>
+    </footer>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
