@@ -44,6 +44,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   const statusBanner = document.getElementById('statusBanner');
   const statusText = document.getElementById('statusText');
   const toast = document.getElementById('toast');
+  const personalInfoList = document.getElementById('personalInfoList');
+  const addPersonalInfoBtn = document.getElementById('addPersonalInfoBtn');
 
   // Load existing settings
   const storage = await getStoredSettings();
@@ -77,15 +79,82 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     if (savedKey) {
       updateStatus('ready', `${provider.toUpperCase()} API Key configured & ready`);
+    } else if (storage.personalInfo && storage.personalInfo.length > 0) {
+      updateStatus('ready', 'Personal Info saved (AI Key optional)');
     } else {
-      updateStatus('missing', `${provider.toUpperCase()} API Key missing - Enter your key below`);
+      updateStatus('idle', 'Configure Personal Info or API Key below');
     }
   }
+
+  // Personal Info Row Renderers
+  function renderPersonalInfoRows(items = []) {
+    personalInfoList.innerHTML = '';
+    if (!items || items.length === 0) {
+      const emptyHint = document.createElement('div');
+      emptyHint.className = 'pi-empty-hint';
+      emptyHint.textContent = 'No personal fields added yet. Click "+ Add Field" to add your Name, Email, etc.';
+      personalInfoList.appendChild(emptyHint);
+      return;
+    }
+
+    items.forEach((item, index) => {
+      addPersonalInfoRow(item.key || '', item.value || '');
+    });
+  }
+
+  function addPersonalInfoRow(key = '', value = '') {
+    const emptyHint = personalInfoList.querySelector('.pi-empty-hint');
+    if (emptyHint) emptyHint.remove();
+
+    const row = document.createElement('div');
+    row.className = 'personal-info-row';
+    row.innerHTML = `
+      <input type="text" class="pi-key" placeholder="Field (e.g. Name)" value="${escapeHtml(key)}" />
+      <input type="text" class="pi-value" placeholder="Value (e.g. John Doe)" value="${escapeHtml(value)}" />
+      <button type="button" class="pi-delete-btn" title="Remove field">&times;</button>
+    `;
+
+    row.querySelector('.pi-delete-btn').addEventListener('click', () => {
+      row.remove();
+      if (personalInfoList.children.length === 0) {
+        renderPersonalInfoRows([]);
+      }
+    });
+
+    personalInfoList.appendChild(row);
+  }
+
+  function getPersonalInfoFromUI() {
+    const rows = personalInfoList.querySelectorAll('.personal-info-row');
+    const items = [];
+    rows.forEach(row => {
+      const key = row.querySelector('.pi-key')?.value?.trim() || '';
+      const val = row.querySelector('.pi-value')?.value?.trim() || '';
+      if (key && val) {
+        items.push({ key, value: val });
+      }
+    });
+    return items;
+  }
+
+  function escapeHtml(text) {
+    return (text || '').replace(/"/g, '&quot;');
+  }
+
+  addPersonalInfoBtn.addEventListener('click', () => {
+    addPersonalInfoRow('', '');
+    const rows = personalInfoList.querySelectorAll('.personal-info-row');
+    const lastRow = rows[rows.length - 1];
+    if (lastRow) {
+      lastRow.querySelector('.pi-key')?.focus();
+    }
+  });
 
   // Initial UI Setup
   const initialKey = currentProvider === 'groq' ? (storage.groqApiKey || '') : (storage.geminiApiKey || '');
   const initialModel = currentProvider === 'groq' ? (storage.groqModel || '') : (storage.geminiModel || '');
   updateProviderUI(currentProvider, initialKey, initialModel);
+  renderPersonalInfoRows(storage.personalInfo || []);
 
   // Switch Provider
   providerSelect.addEventListener('change', async () => {
@@ -158,12 +227,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const provider = providerSelect.value;
     const key = apiKeyInput.value.trim();
     const model = modelSelect.value;
-
-    if (!key) {
-      showToast('API Key cannot be empty.', 'error');
-      apiKeyInput.focus();
-      return;
-    }
+    const personalInfo = getPersonalInfoFromUI();
 
     setLoading(saveBtn, true, 'Saving...');
     testBtn.disabled = true;
@@ -171,7 +235,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     try {
       const payload = {
-        aiProvider: provider
+        aiProvider: provider,
+        personalInfo: personalInfo
       };
 
       if (provider === 'groq') {
@@ -183,8 +248,14 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
 
       await saveStoredSettings(payload);
-      showToast('Settings saved successfully!', 'success');
-      updateStatus('ready', `${provider.toUpperCase()} API Key saved & active`);
+      showToast('Settings & Personal Info saved!', 'success');
+      if (key) {
+        updateStatus('ready', `${provider.toUpperCase()} API Key saved & active`);
+      } else if (personalInfo && personalInfo.length > 0) {
+        updateStatus('ready', 'Personal Info saved & active');
+      } else {
+        updateStatus('idle', 'Settings saved');
+      }
     } catch (err) {
       showToast('Failed to save settings.', 'error');
     } finally {
@@ -220,16 +291,23 @@ function getStoredSettings() {
   return new Promise((resolve) => {
     if (typeof chrome !== 'undefined' && chrome.storage) {
       const storageArea = chrome.storage.sync || chrome.storage.local;
-      storageArea.get(['aiProvider', 'geminiApiKey', 'geminiModel', 'groqApiKey', 'groqModel'], (result) => {
+      storageArea.get(['aiProvider', 'geminiApiKey', 'geminiModel', 'groqApiKey', 'groqModel', 'personalInfo'], (result) => {
         resolve(result || {});
       });
     } else {
+      let savedPI = [];
+      try {
+        savedPI = JSON.parse(localStorage.getItem('personalInfo') || '[]');
+      } catch (e) {
+        savedPI = [];
+      }
       resolve({
         aiProvider: localStorage.getItem('aiProvider') || 'gemini',
         geminiApiKey: localStorage.getItem('geminiApiKey') || '',
         geminiModel: localStorage.getItem('geminiModel') || 'gemini-2.5-flash',
         groqApiKey: localStorage.getItem('groqApiKey') || '',
-        groqModel: localStorage.getItem('groqModel') || 'openai/gpt-oss-120b'
+        groqModel: localStorage.getItem('groqModel') || 'openai/gpt-oss-120b',
+        personalInfo: savedPI
       });
     }
   });
@@ -248,7 +326,11 @@ function saveStoredSettings(settings) {
       });
     } else {
       for (const [k, v] of Object.entries(settings)) {
-        localStorage.setItem(k, v || '');
+        if (typeof v === 'object') {
+          localStorage.setItem(k, JSON.stringify(v));
+        } else {
+          localStorage.setItem(k, v || '');
+        }
       }
       resolve();
     }

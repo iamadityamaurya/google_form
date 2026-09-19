@@ -1,4 +1,4 @@
-// AI Filler for Google Forms - Direct Client-Side Multi-Provider BYOK (Gemini & Groq)
+// AI Filler for Google Forms - Direct Client-Side Multi-Provider BYOK (Gemini & Groq) with Personal Info Support
 
 const PROVIDER_MODELS = {
   gemini: [
@@ -38,16 +38,23 @@ function getExtensionSettings() {
   return new Promise((resolve) => {
     if (typeof chrome !== 'undefined' && chrome.storage) {
       const storageArea = chrome.storage.sync || chrome.storage.local;
-      storageArea.get(['aiProvider', 'geminiApiKey', 'geminiModel', 'groqApiKey', 'groqModel'], (result) => {
+      storageArea.get(['aiProvider', 'geminiApiKey', 'geminiModel', 'groqApiKey', 'groqModel', 'personalInfo'], (result) => {
         resolve(result || {});
       });
     } else {
+      let savedPI = [];
+      try {
+        savedPI = JSON.parse(localStorage.getItem('personalInfo') || '[]');
+      } catch (e) {
+        savedPI = [];
+      }
       resolve({
         aiProvider: localStorage.getItem('aiProvider') || 'gemini',
         geminiApiKey: localStorage.getItem('geminiApiKey') || '',
         geminiModel: localStorage.getItem('geminiModel') || 'gemini-2.5-flash',
         groqApiKey: localStorage.getItem('groqApiKey') || '',
-        groqModel: localStorage.getItem('groqModel') || 'openai/gpt-oss-120b'
+        groqModel: localStorage.getItem('groqModel') || 'openai/gpt-oss-120b',
+        personalInfo: savedPI
       });
     }
   });
@@ -67,7 +74,11 @@ function saveExtensionSettings(settings) {
       });
     } else {
       for (const [k, v] of Object.entries(settings)) {
-        localStorage.setItem(k, v || '');
+        if (typeof v === 'object') {
+          localStorage.setItem(k, JSON.stringify(v));
+        } else {
+          localStorage.setItem(k, v || '');
+        }
       }
       resolve();
     }
@@ -164,16 +175,27 @@ function normalizeText(s) {
   return (s || '').toLowerCase().replace(/\s+/g, ' ').replace(/[^\w\d ]+/g, '').trim();
 }
 
-function buildPromptInstructions(questions) {
+function buildPromptInstructions(questions, personalInfo = []) {
+  let profileSection = '';
+  if (personalInfo && personalInfo.length > 0) {
+    const validPairs = personalInfo.filter(p => p.key && p.value);
+    if (validPairs.length > 0) {
+      profileSection = `\nUSER'S PERSONAL PROFILE (Use these exact values when questions ask for matching personal/contact info):\n` +
+        validPairs.map(p => `- ${p.key}: ${p.value}`).join('\n') + '\n';
+    }
+  }
+
   return `You are an expert automated form-filling assistant.
 Analyze the following Google Form questions and provide the most accurate, appropriate answers.
-
+${profileSection}
 CRITICAL INSTRUCTIONS:
 1. For 'multiple_choice': Pick the single best matching option from the provided "options" list.
 2. For 'checkbox': Return a JSON array of the best matching option strings from the provided "options" list.
 3. For 'dropdown': Pick the single best matching option string from the "options" list.
 4. For 'text': Provide a concise, accurate, and relevant answer.
-5. PERSONAL IDENTIFIABLE INFORMATION (PII): If a question asks for personal or unique identity info (e.g., full name, first name, last name, personal email, student ID, roll number, phone number, physical address, signature, photo upload), return an empty string "" so the user can fill it manually.
+5. PERSONAL IDENTIFIABLE INFORMATION (PII):
+   - If a question asks for personal/contact info (e.g. Full Name, First Name, Last Name, Email, Phone, Roll Number, Student ID, College, University, Department, Organization, Address, etc.) AND a matching key is present in the USER'S PERSONAL PROFILE above, provide that exact value.
+   - If a question asks for personal info but NO matching value is provided in the USER'S PERSONAL PROFILE, return an empty string "" so the user can fill it manually.
 6. Return a valid JSON object strictly matching this schema:
 {
   "results": [
@@ -190,9 +212,9 @@ ${JSON.stringify(questions, null, 2)}`;
 }
 
 // Generate Answers directly via Google Gemini API
-async function queryGeminiDirectly(questions, apiKey, model = 'gemini-2.5-flash') {
+async function queryGeminiDirectly(questions, apiKey, model = 'gemini-2.5-flash', personalInfo = []) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-  const promptText = buildPromptInstructions(questions);
+  const promptText = buildPromptInstructions(questions, personalInfo);
 
   const requestBody = {
     contents: [
@@ -231,9 +253,9 @@ async function queryGeminiDirectly(questions, apiKey, model = 'gemini-2.5-flash'
 }
 
 // Generate Answers directly via Groq API
-async function queryGroqDirectly(questions, apiKey, model = 'openai/gpt-oss-120b') {
+async function queryGroqDirectly(questions, apiKey, model = 'openai/gpt-oss-120b', personalInfo = []) {
   const url = 'https://api.groq.com/openai/v1/chat/completions';
-  const promptText = buildPromptInstructions(questions);
+  const promptText = buildPromptInstructions(questions, personalInfo);
 
   const requestBody = {
     model: model,
@@ -277,11 +299,11 @@ async function queryGroqDirectly(questions, apiKey, model = 'openai/gpt-oss-120b
 }
 
 // Unified Query Handler
-async function queryAiDirectly(questions, provider, apiKey, model) {
+async function queryAiDirectly(questions, provider, apiKey, model, personalInfo = []) {
   if (provider === 'groq') {
-    return queryGroqDirectly(questions, apiKey, model || 'openai/gpt-oss-120b');
+    return queryGroqDirectly(questions, apiKey, model || 'openai/gpt-oss-120b', personalInfo);
   }
-  return queryGeminiDirectly(questions, apiKey, model || 'gemini-2.5-flash');
+  return queryGeminiDirectly(questions, apiKey, model || 'gemini-2.5-flash', personalInfo);
 }
 
 // Fill detected answer into the Google Form DOM
@@ -425,7 +447,65 @@ function getRadioLabel(radioInput, container) {
   return parent?.innerText?.trim() || '';
 }
 
-// In-Page Settings Modal (Supports both Gemini and Groq)
+// Local matching of personal info fields without requiring AI
+function fillPersonalInfoLocally(questions, personalInfo = []) {
+  if (!personalInfo || personalInfo.length === 0) return 0;
+  const validPairs = personalInfo.filter(p => p && p.key && p.value && p.key.trim() && p.value.trim());
+  if (validPairs.length === 0) return 0;
+
+  let filledCount = 0;
+
+  const aliases = {
+    name: ['full name', 'candidate name', 'applicant name', 'your name', 'student name', 'enter name', 'name of applicant', 'person name'],
+    fname: ['first name', 'given name', 'f name'],
+    lname: ['last name', 'surname', 'family name', 'l name'],
+    email: ['email address', 'e mail', 'mail', 'email id', 'contact email', 'student email'],
+    phone: ['mobile', 'phone number', 'contact number', 'telephone', 'mobile number', 'whatsapp number', 'cell', 'contact no'],
+    college: ['university', 'institution', 'institute', 'school', 'campus', 'college name', 'dept', 'department'],
+    roll: ['roll number', 'roll no', 'registration number', 'reg no', 'enrolment number', 'enrollment no', 'student id', 'id number', 'hall ticket'],
+    address: ['residential address', 'permanent address', 'current address', 'street address', 'city', 'location', 'state', 'pincode', 'zip code', 'postal code'],
+    gender: ['sex']
+  };
+
+  for (const q of questions) {
+    const qNorm = normalizeText(q.question);
+    if (!qNorm) continue;
+
+    for (const pair of validPairs) {
+      const kNorm = normalizeText(pair.key);
+      if (!kNorm) continue;
+
+      let isMatch = false;
+
+      if (qNorm === kNorm || qNorm.includes(kNorm)) {
+        isMatch = true;
+      } else {
+        for (const [canonical, syns] of Object.entries(aliases)) {
+          const allSyns = [canonical, ...syns];
+          const keyMatchesGroup = allSyns.some(s => kNorm === s || kNorm.includes(s));
+          if (keyMatchesGroup) {
+            if (allSyns.some(s => qNorm.includes(s))) {
+              isMatch = true;
+              break;
+            }
+          }
+        }
+      }
+
+      if (isMatch) {
+        const success = fillAnswerForQuestion(q.id, pair.value, q.type);
+        if (success) {
+          filledCount++;
+          break;
+        }
+      }
+    }
+  }
+
+  return filledCount;
+}
+
+// In-Page Settings Modal (Supports Gemini, Groq, and Personal Information)
 function showSettingsModal(onSavedCallback) {
   let modalOverlay = document.getElementById('gf-settings-modal-overlay');
   if (modalOverlay) {
@@ -445,19 +525,26 @@ function showSettingsModal(onSavedCallback) {
           </div>
           <div>
             <h3 class="gf-modal-title">AI Filler Settings</h3>
-            <p class="gf-modal-subtitle">Bring Your Own API Key (BYOK)</p>
+            <p class="gf-modal-subtitle">Configure AI & Personal Info</p>
           </div>
         </div>
-        <button type="button" class="gf-modal-close" id="gf-modal-close-btn">&times;</button>
+        <button type="button" class="gf-modal-close" id="gf-modal-close-btn" title="Close">&times;</button>
       </div>
 
       <div class="gf-modal-body">
         <div class="gf-modal-field">
           <label for="gf-modal-provider">AI Provider</label>
-          <select id="gf-modal-provider" class="gf-modal-select">
-            <option value="gemini">Google Gemini</option>
-            <option value="groq">Groq (Ultra Fast Inference)</option>
-          </select>
+          <div class="gf-modal-select-wrapper">
+            <select id="gf-modal-provider" class="gf-modal-select">
+              <option value="gemini">Google Gemini</option>
+              <option value="groq">Groq (Ultra Fast Inference)</option>
+            </select>
+            <div class="gf-modal-select-arrow">
+              <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none">
+                <polyline points="6 9 12 15 18 9"></polyline>
+              </svg>
+            </div>
+          </div>
         </div>
 
         <div class="gf-modal-field">
@@ -467,17 +554,44 @@ function showSettingsModal(onSavedCallback) {
               Get Free Key &rarr;
             </a>
           </div>
-          <input type="password" id="gf-modal-key" placeholder="AIzaSy..." class="gf-modal-input" />
-          <p class="gf-modal-hint">Key is saved securely inside your browser.</p>
+          <div class="gf-modal-input-wrapper">
+            <input type="password" id="gf-modal-key" placeholder="AIzaSy..." class="gf-modal-input" autocomplete="off" spellcheck="false" />
+            <button type="button" id="gf-modal-toggle-key" class="gf-modal-icon-btn" title="Toggle visibility">
+              <svg id="gf-modal-eye-icon" viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                <circle cx="12" cy="12" r="3"></circle>
+              </svg>
+            </button>
+          </div>
         </div>
 
         <div class="gf-modal-field">
           <label for="gf-modal-model">Model</label>
-          <select id="gf-modal-model" class="gf-modal-select">
-          </select>
+          <div class="gf-modal-select-wrapper">
+            <select id="gf-modal-model" class="gf-modal-select">
+            </select>
+            <div class="gf-modal-select-arrow">
+              <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none">
+                <polyline points="6 9 12 15 18 9"></polyline>
+              </svg>
+            </div>
+          </div>
         </div>
 
-        <div id="gf-modal-status" class="gf-modal-status-msg hidden"></div>
+        <!-- In-Modal Personal Info Section -->
+        <div class="gf-modal-field">
+          <div class="gf-modal-label-row">
+            <label>Personal Info (Auto-Fill)</label>
+            <button type="button" id="gf-modal-add-pi" class="gf-modal-link" style="background:none;border:none;cursor:pointer;">
+              + Add Field
+            </button>
+          </div>
+          <div id="gf-modal-pi-list" class="gf-modal-pi-list">
+            <!-- Dynamic Personal Info Rows -->
+          </div>
+        </div>
+
+        <div id="gf-modal-status" class="gf-modal-status-msg"></div>
       </div>
 
       <div class="gf-modal-footer">
@@ -494,6 +608,73 @@ function showSettingsModal(onSavedCallback) {
   const keyLink = document.getElementById('gf-modal-key-link');
   const keyInput = document.getElementById('gf-modal-key');
   const modelSelect = document.getElementById('gf-modal-model');
+  const piList = document.getElementById('gf-modal-pi-list');
+  const addPiBtn = document.getElementById('gf-modal-add-pi');
+  const toggleKeyBtn = document.getElementById('gf-modal-toggle-key');
+
+  if (toggleKeyBtn && keyInput) {
+    toggleKeyBtn.addEventListener('click', () => {
+      if (keyInput.type === 'password') {
+        keyInput.type = 'text';
+        toggleKeyBtn.style.color = '#c084fc';
+      } else {
+        keyInput.type = 'password';
+        toggleKeyBtn.style.color = '';
+      }
+    });
+  }
+
+  function renderPiRow(key = '', val = '') {
+    const row = document.createElement('div');
+    row.className = 'gf-modal-pi-row';
+    row.innerHTML = `
+      <input type="text" class="gf-modal-input gf-pi-key" placeholder="Field (e.g. Name)" value="${escapeHtml(key)}" autocomplete="off" spellcheck="false" />
+      <input type="text" class="gf-modal-input gf-pi-val" placeholder="Value (e.g. Aditya)" value="${escapeHtml(val)}" autocomplete="off" spellcheck="false" />
+      <button type="button" class="gf-pi-del-btn" title="Remove Field">
+        <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none">
+          <line x1="18" y1="6" x2="6" y2="18"></line>
+          <line x1="6" y1="6" x2="18" y2="18"></line>
+        </svg>
+      </button>
+    `;
+    row.querySelector('.gf-pi-del-btn').addEventListener('click', () => row.remove());
+    piList.appendChild(row);
+  }
+
+  function renderPiList(items = []) {
+    piList.innerHTML = '';
+    if (!items || items.length === 0) {
+      const hint = document.createElement('div');
+      hint.className = 'gf-pi-empty-hint';
+      hint.textContent = 'No personal fields. Click "+ Add Field" to add Name, Email, etc.';
+      piList.appendChild(hint);
+      return;
+    }
+    items.forEach(item => renderPiRow(item.key, item.value));
+  }
+
+  addPiBtn.addEventListener('click', () => {
+    const hint = piList.querySelector('.gf-pi-empty-hint');
+    if (hint) hint.remove();
+    renderPiRow('', '');
+  });
+
+  function getPiFromModal() {
+    const rows = piList.querySelectorAll('.gf-modal-pi-row');
+    const items = [];
+    rows.forEach(row => {
+      const key = row.querySelector('.gf-pi-key')?.value?.trim() || '';
+      const val = row.querySelector('.gf-pi-val')?.value?.trim() || '';
+      if (key && val) {
+        items.push({ key, value: val });
+      }
+    });
+    return items;
+  }
+
+  function escapeHtml(text) {
+    return (text || '').replace(/"/g, '&quot;');
+  }
 
   function renderProviderFields(provider, currentKey = '', currentModel = '') {
     const config = PROVIDER_CONFIG[provider] || PROVIDER_CONFIG.gemini;
@@ -525,6 +706,7 @@ function showSettingsModal(onSavedCallback) {
     const key = provider === 'groq' ? (settings.groqApiKey || '') : (settings.geminiApiKey || '');
     const model = provider === 'groq' ? (settings.groqModel || '') : (settings.geminiModel || '');
     renderProviderFields(provider, key, model);
+    renderPiList(settings.personalInfo || []);
   });
 
   providerSelect.addEventListener('change', async () => {
@@ -535,7 +717,20 @@ function showSettingsModal(onSavedCallback) {
     renderProviderFields(provider, key, model);
   });
 
-  const close = () => modalOverlay.remove();
+  const close = () => {
+    modalOverlay.remove();
+    document.removeEventListener('keydown', handleKeyDown);
+  };
+
+  const handleKeyDown = (e) => {
+    if (e.key === 'Escape') close();
+  };
+  document.addEventListener('keydown', handleKeyDown);
+
+  modalOverlay.addEventListener('click', (e) => {
+    if (e.target === modalOverlay) close();
+  });
+
   document.getElementById('gf-modal-close-btn').addEventListener('click', close);
   document.getElementById('gf-modal-cancel').addEventListener('click', close);
 
@@ -543,18 +738,16 @@ function showSettingsModal(onSavedCallback) {
     const provider = providerSelect.value;
     const key = keyInput.value.trim();
     const model = modelSelect.value;
+    const personalInfo = getPiFromModal();
     const statusEl = document.getElementById('gf-modal-status');
 
-    if (!key) {
-      statusEl.textContent = `Please enter a valid ${provider.toUpperCase()} API key.`;
-      statusEl.className = 'gf-modal-status-msg error';
-      return;
-    }
+    statusEl.textContent = 'Saving settings...';
+    statusEl.className = 'gf-modal-status-msg active';
 
-    statusEl.textContent = 'Saving...';
-    statusEl.className = 'gf-modal-status-msg';
-
-    const payload = { aiProvider: provider };
+    const payload = {
+      aiProvider: provider,
+      personalInfo: personalInfo
+    };
     if (provider === 'groq') {
       payload.groqApiKey = key;
       payload.groqModel = model;
@@ -566,7 +759,7 @@ function showSettingsModal(onSavedCallback) {
     await saveExtensionSettings(payload);
     close();
     if (typeof onSavedCallback === 'function') {
-      onSavedCallback(provider, key, model);
+      onSavedCallback(provider, key, model, personalInfo);
     }
   });
 }
@@ -673,97 +866,150 @@ function createButton() {
       animation: gf-pulse-glow 2.2s infinite;
     }
 
-    /* Modal Overlay Styles */
+    /* Modal Overlay & Card Styles */
+    #gf-settings-modal-overlay,
+    #gf-settings-modal-overlay * {
+      box-sizing: border-box !important;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important;
+    }
+
     #gf-settings-modal-overlay {
       position: fixed;
       inset: 0;
-      background: rgba(15, 23, 42, 0.75);
+      background: rgba(15, 23, 42, 0.8);
       backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
       z-index: 1000000;
       display: flex;
       align-items: center;
       justify-content: center;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      padding: 16px;
+      animation: gf-fade-in 0.2s ease-out;
+    }
+
+    @keyframes gf-fade-in {
+      from { opacity: 0; }
+      to { opacity: 1; }
     }
 
     .gf-modal-card {
       background: #0f172a;
-      border: 1px solid rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.12);
       border-radius: 16px;
-      width: 380px;
-      max-width: 90vw;
-      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.6);
+      width: 480px;
+      max-width: 100%;
+      box-shadow: 0 25px 60px -15px rgba(0, 0, 0, 0.75), 0 0 0 1px rgba(255, 255, 255, 0.05);
       overflow: hidden;
       color: #f8fafc;
       animation: gf-modal-in 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+      display: flex;
+      flex-direction: column;
+      max-height: 90vh;
     }
 
     @keyframes gf-modal-in {
-      from { opacity: 0; transform: scale(0.95) translateY(10px); }
+      from { opacity: 0; transform: scale(0.96) translateY(8px); }
       to { opacity: 1; transform: scale(1) translateY(0); }
     }
 
     .gf-modal-header {
-      padding: 16px 20px;
+      padding: 18px 22px;
       border-bottom: 1px solid rgba(255, 255, 255, 0.08);
       display: flex;
       align-items: center;
       justify-content: space-between;
+      flex-shrink: 0;
     }
 
     .gf-modal-title-row {
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 12px;
     }
 
     .gf-modal-logo {
-      width: 32px;
-      height: 32px;
-      border-radius: 8px;
-      background: linear-gradient(135deg, #6366f1, #a855f7);
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #ec4899 100%);
       display: flex;
       align-items: center;
       justify-content: center;
       color: white;
+      box-shadow: 0 4px 12px rgba(168, 85, 247, 0.35);
+      flex-shrink: 0;
     }
 
     .gf-modal-title {
-      font-size: 15px;
+      font-size: 16px;
       font-weight: 700;
+      color: #f8fafc;
       margin: 0;
+      line-height: 1.2;
     }
 
     .gf-modal-subtitle {
-      font-size: 11px;
+      font-size: 12px;
       color: #94a3b8;
-      margin: 0;
+      margin: 3px 0 0 0;
+      font-weight: 500;
     }
 
     .gf-modal-close {
-      background: transparent;
-      border: none;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 8px;
       color: #94a3b8;
-      font-size: 22px;
+      width: 30px;
+      height: 30px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
       cursor: pointer;
       line-height: 1;
+      transition: all 0.15s ease;
     }
 
     .gf-modal-close:hover {
+      background: rgba(255, 255, 255, 0.12);
       color: #ffffff;
+      border-color: rgba(255, 255, 255, 0.2);
     }
 
     .gf-modal-body {
-      padding: 20px;
+      padding: 20px 22px;
       display: flex;
       flex-direction: column;
-      gap: 14px;
+      gap: 15px;
+      overflow-y: auto;
+      overflow-x: hidden;
+      flex: 1;
+    }
+
+    .gf-modal-body::-webkit-scrollbar,
+    .gf-modal-pi-list::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    .gf-modal-body::-webkit-scrollbar-track,
+    .gf-modal-pi-list::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .gf-modal-body::-webkit-scrollbar-thumb,
+    .gf-modal-pi-list::-webkit-scrollbar-thumb {
+      background: #334155;
+      border-radius: 4px;
+    }
+    .gf-modal-body::-webkit-scrollbar-thumb:hover,
+    .gf-modal-pi-list::-webkit-scrollbar-thumb:hover {
+      background: #475569;
     }
 
     .gf-modal-field {
       display: flex;
       flex-direction: column;
-      gap: 6px;
+      gap: 7px;
     }
 
     .gf-modal-label-row {
@@ -777,73 +1023,203 @@ function createButton() {
       font-weight: 600;
       color: #94a3b8;
       text-transform: uppercase;
-      letter-spacing: 0.5px;
+      letter-spacing: 0.05em;
     }
 
     .gf-modal-link {
       font-size: 11px;
-      color: #c084fc;
+      color: #a855f7;
       text-decoration: none;
       font-weight: 600;
+      transition: color 0.15s ease;
     }
 
     .gf-modal-link:hover {
+      color: #c084fc;
       text-decoration: underline;
     }
 
+    .gf-modal-input-wrapper,
+    .gf-modal-select-wrapper {
+      position: relative;
+      display: flex;
+      align-items: center;
+      width: 100%;
+    }
+
     .gf-modal-input, .gf-modal-select {
+      width: 100%;
+      min-width: 0;
       background: #0b1120;
-      border: 1px solid rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.12);
       border-radius: 8px;
       color: #f8fafc;
       font-size: 13px;
       padding: 10px 12px;
       outline: none;
-      transition: border-color 0.2s;
+      transition: all 0.2s ease;
+      box-sizing: border-box;
     }
 
     .gf-modal-input:focus, .gf-modal-select:focus {
       border-color: #a855f7;
-      box-shadow: 0 0 0 3px rgba(168, 85, 247, 0.2);
+      box-shadow: 0 0 0 3px rgba(168, 85, 247, 0.25);
+      background: #0d1527;
     }
 
-    .gf-modal-hint {
-      font-size: 11px;
+    .gf-modal-input::placeholder {
       color: #64748b;
-      margin: 0;
+    }
+
+    .gf-modal-select {
+      appearance: none;
+      -webkit-appearance: none;
+      padding-right: 36px;
+      cursor: pointer;
+    }
+
+    .gf-modal-select-arrow {
+      position: absolute;
+      right: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      pointer-events: none;
+      color: #94a3b8;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .gf-modal-icon-btn {
+      position: absolute;
+      right: 10px;
+      background: transparent;
+      border: none;
+      color: #64748b;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 4px;
+      border-radius: 4px;
+      transition: color 0.15s ease;
+    }
+
+    .gf-modal-icon-btn:hover {
+      color: #f8fafc;
+    }
+
+    .gf-modal-pi-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      max-height: 160px;
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding-right: 2px;
+      scrollbar-width: thin;
+      scrollbar-color: #334155 transparent;
+    }
+
+    .gf-modal-pi-row {
+      display: grid;
+      grid-template-columns: 1fr 1.3fr 32px;
+      gap: 8px;
+      align-items: center;
+      width: 100%;
+      box-sizing: border-box;
+    }
+
+    .gf-modal-pi-row input {
+      width: 100%;
+      min-width: 0;
+      padding: 8px 10px;
+      font-size: 12.5px;
+      box-sizing: border-box;
+    }
+
+    .gf-pi-del-btn {
+      background: rgba(239, 68, 68, 0.08);
+      border: 1px solid rgba(239, 68, 68, 0.25);
+      color: #f87171;
+      border-radius: 8px;
+      height: 34px;
+      width: 32px;
+      min-width: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      font-size: 16px;
+      line-height: 1;
+      transition: all 0.15s ease;
+      box-sizing: border-box;
+    }
+
+    .gf-pi-del-btn:hover {
+      background: rgba(239, 68, 68, 0.2);
+      color: #ff8585;
+      border-color: rgba(239, 68, 68, 0.4);
+    }
+
+    .gf-pi-empty-hint {
+      font-size: 11.5px;
+      color: #64748b;
+      font-style: italic;
+      padding: 4px 0;
     }
 
     .gf-modal-status-msg {
+      display: none;
       font-size: 12px;
-      padding: 8px 12px;
-      border-radius: 6px;
+      font-weight: 500;
+      padding: 10px 14px;
+      border-radius: 8px;
       background: rgba(255, 255, 255, 0.05);
       color: #94a3b8;
+      border: 1px solid transparent;
+    }
+
+    .gf-modal-status-msg.active {
+      display: block;
     }
 
     .gf-modal-status-msg.error {
+      display: block;
       background: rgba(239, 68, 68, 0.15);
       color: #f87171;
       border: 1px solid rgba(239, 68, 68, 0.3);
     }
 
+    .gf-modal-status-msg.success {
+      display: block;
+      background: rgba(16, 185, 129, 0.15);
+      color: #34d399;
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+
     .gf-modal-footer {
-      padding: 14px 20px;
+      padding: 16px 22px;
       border-top: 1px solid rgba(255, 255, 255, 0.08);
       display: flex;
       justify-content: flex-end;
       gap: 10px;
       background: #090e1a;
+      flex-shrink: 0;
     }
 
     .gf-modal-btn {
-      padding: 8px 16px;
+      padding: 9px 18px;
       border-radius: 8px;
       font-size: 13px;
       font-weight: 600;
       cursor: pointer;
       border: none;
-      transition: all 0.2s;
+      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
     }
 
     .gf-btn-cancel {
@@ -855,16 +1231,22 @@ function createButton() {
     .gf-btn-cancel:hover {
       background: #273549;
       color: #ffffff;
+      border-color: rgba(255, 255, 255, 0.15);
     }
 
     .gf-btn-save {
-      background: linear-gradient(135deg, #6366f1, #a855f7);
+      background: linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #ec4899 100%);
       color: #ffffff;
-      box-shadow: 0 4px 12px rgba(168, 85, 247, 0.3);
+      box-shadow: 0 4px 14px rgba(139, 92, 246, 0.35);
     }
 
     .gf-btn-save:hover {
-      box-shadow: 0 6px 18px rgba(168, 85, 247, 0.5);
+      transform: translateY(-1px);
+      box-shadow: 0 6px 20px rgba(168, 85, 247, 0.45);
+    }
+
+    .gf-btn-save:active {
+      transform: translateY(1px);
     }
   `;
   document.head.appendChild(style);
@@ -970,7 +1352,7 @@ function createButton() {
   document.addEventListener("mousemove", drag, false);
 
   // Trigger Fill Flow
-  async function triggerAutoFill(provider, apiKey, model) {
+  async function triggerAutoFill(provider, apiKey, model, personalInfo = []) {
     btn.disabled = true;
     btn.classList.remove('gf-pulse');
     updateBtn('Analyzing form...', 'loading');
@@ -987,35 +1369,58 @@ function createButton() {
     }
 
     try {
-      const providerDisplayName = provider === 'groq' ? 'Groq' : 'Gemini';
-      updateBtn(`${providerDisplayName} Thinking...`, 'loading');
-      const response = await queryAiDirectly(qs, provider, apiKey, model);
+      if (apiKey) {
+        const providerDisplayName = provider === 'groq' ? 'Groq' : 'Gemini';
+        updateBtn(`${providerDisplayName} Thinking...`, 'loading');
+        const response = await queryAiDirectly(qs, provider, apiKey, model, personalInfo);
 
-      if (response?.results?.length) {
-        let filledCount = 0;
-        updateBtn('Filling form...', 'loading');
-        await new Promise(r => setTimeout(r, 400));
+        if (response?.results?.length) {
+          let filledCount = 0;
+          updateBtn('Filling form...', 'loading');
+          await new Promise(r => setTimeout(r, 400));
 
-        for (const result of response.results) {
-          const id = result.questionId;
-          const ans = result.answer;
-          const qType = result.questionType || 'multiple_choice';
+          for (const result of response.results) {
+            const id = result.questionId;
+            const ans = result.answer;
+            const qType = result.questionType || 'multiple_choice';
 
-          if (id && (ans !== undefined && ans !== null && ans !== '')) {
-            const filled = fillAnswerForQuestion(id, ans, qType);
-            if (filled) {
-              filledCount++;
+            if (id && (ans !== undefined && ans !== null && ans !== '')) {
+              const filled = fillAnswerForQuestion(id, ans, qType);
+              if (filled) {
+                filledCount++;
+              }
             }
           }
-        }
 
-        updateBtn(`Filled ${filledCount}/${response.results.length}`, 'success');
+          updateBtn(`Filled ${filledCount}/${response.results.length}`, 'success');
+        } else {
+          // Fallback to local personal info fill if AI returned no results
+          const localCount = fillPersonalInfoLocally(qs, personalInfo);
+          if (localCount > 0) {
+            updateBtn(`Filled ${localCount} info field${localCount > 1 ? 's' : ''}`, 'success');
+          } else {
+            updateBtn('No answers generated', 'error');
+          }
+        }
       } else {
-        updateBtn('No answers generated', 'error');
+        // No API key provided - direct personal info autofill
+        updateBtn('Filling personal info...', 'loading');
+        await new Promise(r => setTimeout(r, 300));
+        const localCount = fillPersonalInfoLocally(qs, personalInfo);
+        if (localCount > 0) {
+          updateBtn(`Filled ${localCount} field${localCount > 1 ? 's' : ''}`, 'success');
+        } else {
+          updateBtn('No matching fields found', 'error');
+        }
       }
     } catch (error) {
       console.error('[AI Filler] Error answering form:', error);
-      updateBtn(error.message?.slice(0, 24) || 'Error filling form', 'error');
+      const localCount = fillPersonalInfoLocally(qs, personalInfo);
+      if (localCount > 0) {
+        updateBtn(`Filled ${localCount} field${localCount > 1 ? 's' : ''}`, 'success');
+      } else {
+        updateBtn(error.message?.slice(0, 24) || 'Error filling form', 'error');
+      }
     }
 
     setTimeout(() => {
@@ -1030,15 +1435,19 @@ function createButton() {
     const provider = settings.aiProvider || 'gemini';
     const key = provider === 'groq' ? settings.groqApiKey : settings.geminiApiKey;
     const model = provider === 'groq' ? (settings.groqModel || 'openai/gpt-oss-120b') : (settings.geminiModel || 'gemini-2.5-flash');
+    const personalInfo = settings.personalInfo || [];
 
-    if (!key) {
-      showSettingsModal((newProvider, newKey, newModel) => {
-        triggerAutoFill(newProvider, newKey, newModel);
+    const hasPersonalInfo = personalInfo && personalInfo.some(p => p.key && p.value);
+
+    // If neither API key nor Personal Info is provided, prompt the settings modal
+    if (!key && !hasPersonalInfo) {
+      showSettingsModal((newProvider, newKey, newModel, newPi) => {
+        triggerAutoFill(newProvider, newKey, newModel, newPi);
       });
       return;
     }
 
-    triggerAutoFill(provider, key, model);
+    triggerAutoFill(provider, key, model, personalInfo);
   });
 
   widget.appendChild(btn);

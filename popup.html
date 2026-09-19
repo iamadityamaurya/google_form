@@ -69,7 +69,6 @@
             placeholder="AIzaSy..." 
             autocomplete="off" 
             spellcheck="false"
-            required
           />
           <button type="button" id="toggleKeyVisibility" class="icon-btn" title="Toggle visibility">
             <svg id="eyeIcon" viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none">
@@ -91,6 +90,20 @@
           <svg class="select-arrow" viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none">
             <polyline points="6 9 12 15 18 9"></polyline>
           </svg>
+        </div>
+      </div>
+
+      <!-- Personal Information Section -->
+      <div class="input-group">
+        <div class="label-row">
+          <label>Personal Info (Auto-Fill)</label>
+          <button type="button" id="addPersonalInfoBtn" class="link-btn" style="background:none;border:none;cursor:pointer;">
+            + Add Field
+          </button>
+        </div>
+        <p class="help-text">Saved values (e.g. Name, Email, Roll No) that AI will use to answer matching personal questions.</p>
+        <div id="personalInfoList" class="personal-info-list">
+          <!-- Dynamic entries -->
         </div>
       </div>
 

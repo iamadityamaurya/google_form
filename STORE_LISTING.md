@@ -18,8 +18,8 @@ AI Filler for Google Forms is a powerful, 100% serverless Chrome extension that 
 ✨ Key Features:
 • 🤖 Direct AI Providers: Direct HTTPS connection from your browser to Google AI Studio or Groq Cloud. No middleman servers!
 • ⚡ Instant Auto-Fill: Answer complex forms in seconds with a single click.
-• 🔒 Safe & Private: Your API key is stored locally in your browser storage. Questions travel straight to the provider.
-• 🧠 Smart PII Protection: Automatically skips personal info fields (Name, Email, Student ID) so you stay in control.
+• 👤 Custom Personal Info Profile: Add your Name, Email, Roll Number, Phone, etc., so the AI automatically fills them.
+• 🔒 Smart Privacy Fallback: Unsaved personal questions remain blank for manual entry.
 • ✅ Supports All Question Types:
     - Multiple Choice (Radio Buttons)
     - Checkboxes (Multiple Selections)

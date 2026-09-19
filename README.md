@@ -49,9 +49,10 @@ A privacy-focused, zero-backend Chrome extension that automatically detects and 
   - ✅ Checkboxes (multiple selections)
   - ✅ Dropdown menus
   - ✅ Short & long text fields
-- 🔒 **Intelligent Privacy Protection**: Automatically detects and leaves personal info fields blank (Name, Email, Student ID, Phone Number, etc.) so you can fill them manually.
+- 👤 **Custom Personal Info Profile**: Save your personal details (Name, Email, Phone, College, Roll Number, etc.) so the AI automatically fills them for you!
+- 🔒 **Smart Privacy Fallback**: If personal questions appear that aren't in your saved profile, the AI leaves them blank for manual entry.
 - ⚡ **Single Click Auto-Fill**: Floating draggable widget on all Google Forms.
-- 🛠️ **In-Page & Toolbar Settings**: Configure keys and switch models on the fly.
+- 🛠️ **In-Page & Toolbar Settings**: Configure keys, switch models, and edit personal fields on the fly.
 
 ---
 
